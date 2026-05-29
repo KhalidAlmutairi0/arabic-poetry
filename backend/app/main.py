@@ -293,33 +293,35 @@ def create_app() -> FastAPI:
         return {"message": f"Seeded {len(POETS)} poets, {len(POEMS)} poems, {total_verses} verses, {len(CATEGORIES)} categories"}
 
     # ── Ashaar dataset import (background) ──────────
-    _import_status = {"running": False, "poets": 0, "poems": 0, "verses": 0, "done": False, "error": None}
+    app.state.import_status = {"running": False, "poets": 0, "poems": 0, "verses": 0, "done": False, "error": None}
 
     @app.post("/admin/import-ashaar", tags=["system"])
     async def import_ashaar(key: str = ""):
         if key != settings.secret_key:
             return {"error": "unauthorized"}
-        if _import_status["running"]:
-            return {"status": "already running", **_import_status}
+        if app.state.import_status["running"]:
+            return {"status": "already running", **app.state.import_status}
 
         import asyncio
+        app.state.import_status.update(running=True, poets=0, poems=0, verses=0, done=False, error=None)
         asyncio.create_task(_run_ashaar_import())
         return {"status": "started", "message": "Import running in background. Check /admin/import-status for progress."}
 
     @app.get("/admin/import-status", tags=["system"])
     async def import_status():
-        return _import_status
+        return app.state.import_status
 
     async def _run_ashaar_import():
         import asyncio
         import re
         import httpx
+        status = app.state.import_status
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
         from sqlalchemy import select, func
         from app.models import Poet, Poem, Verse, Category
         from app.utils.arabic_normalizer import normalizer
 
-        _import_status.update(running=True, poets=0, poems=0, verses=0, done=False, error=None)
+        status.update(running=True, poets=0, poems=0, verses=0, done=False, error=None)
 
         ERA_MAP = {
             "العصر الجاهلي": "pre_islamic", "الجاهلي": "pre_islamic",
@@ -488,16 +490,16 @@ def create_app() -> FastAPI:
 
                     if added_poems % 100 == 0:
                         await session.commit()
-                        _import_status.update(poets=added_poets, poems=added_poems, verses=added_verses)
+                        status.update(poets=added_poets, poems=added_poems, verses=added_verses)
                         logger.info(f"Ashaar import: {added_poets} poets, {added_poems} poems, {added_verses} verses")
 
                 await session.commit()
 
-            _import_status.update(running=False, done=True, poets=added_poets, poems=added_poems, verses=added_verses)
+            status.update(running=False, done=True, poets=added_poets, poems=added_poems, verses=added_verses)
             logger.info(f"Ashaar import DONE: {added_poets} poets, {added_poems} poems, {added_verses} verses")
 
         except Exception as e:
-            _import_status.update(running=False, done=True, error=str(e))
+            status.update(running=False, done=True, error=str(e))
             logger.error(f"Ashaar import FAILED: {e}")
 
     return app
