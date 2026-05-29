@@ -3,7 +3,7 @@ import asyncio, sys, json, re, time, urllib.request, uuid
 sys.path.insert(0, '.')
 sys.stdout.reconfigure(encoding='utf-8')
 
-DB_URL = 'postgresql://postgres:hUlzaqTHKIjgUdEYuudRXmvusiBzgRQk@zephyr.proxy.rlwy.net:56773/railway'
+DB_URL = 'postgresql://postgres:HaqHSzZSdDtxPTGzoDJrVfJppTMHtrOe@zephyr.proxy.rlwy.net:56733/railway'
 HF_API = 'https://datasets-server.huggingface.co/rows'
 METER_NAMES = ['البسيط','الخفيف','الرجز','الرمل','السريع','الطويل','الكامل','المتدارك','المتقارب','المجتث','المديد','المضارع','المقتضب','المنسرح','النثر','الهزج','الوافر']
 ERA_MAP = {'العصر الجاهلي':'pre_islamic','الجاهلي':'pre_islamic','صدر الإسلام':'islamic_early','العصر الأموي':'umayyad','الأموي':'umayyad','العصر العباسي':'abbasid','العباسي':'abbasid','العصر الأندلسي':'andalusian','العصر المملوكي':'mamluk','العصر العثماني':'ottoman','العصر الحديث':'modern','الحديث':'modern','العصر المعاصر':'contemporary','المعاصر':'contemporary'}

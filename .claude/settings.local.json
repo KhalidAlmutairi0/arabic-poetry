@@ -149,7 +149,9 @@
       "Bash(nslookup *)",
       "PowerShell($env:PYTHONIOENCODING = \"utf-8\"; $env:PYTHONUNBUFFERED = \"1\"; Set-Location \"C:\\\\Users\\\\Admin\\\\Desktop\\\\مجلد جديد\"; python -u -X utf8 backend/scripts/remote_import.py 14700 212500)",
       "PowerShell($env:PYTHONIOENCODING = \"utf-8\"; $env:PYTHONUNBUFFERED = \"1\"; Set-Location \"C:\\\\Users\\\\Admin\\\\Desktop\\\\مجلد جديد\\\\backend\"; python -u -X utf8 scripts/neon_fast_import.py 1600)",
-      "PowerShell($env:PYTHONIOENCODING = \"utf-8\"; $env:PYTHONUNBUFFERED = \"1\"; Set-Location \"C:\\\\Users\\\\Admin\\\\Desktop\\\\مجلد جديد\\\\backend\"; python -u -X utf8 scripts/neon_fast_import.py 0)"
+      "PowerShell($env:PYTHONIOENCODING = \"utf-8\"; $env:PYTHONUNBUFFERED = \"1\"; Set-Location \"C:\\\\Users\\\\Admin\\\\Desktop\\\\مجلد جديد\\\\backend\"; python -u -X utf8 scripts/neon_fast_import.py 0)",
+      "PowerShell(python -c \"from meilisearch_python_sdk import AsyncClient; print\\('OK'\\)\" 2>&1)",
+      "PowerShell($env:PYTHONIOENCODING = \"utf-8\"; $env:PYTHONUNBUFFERED = \"1\"; Set-Location \"C:\\\\Users\\\\Admin\\\\Desktop\\\\مجلد جديد\\\\backend\"; python -u -X utf8 scripts/fill_missing_poets.py)"
     ]
   }
 }

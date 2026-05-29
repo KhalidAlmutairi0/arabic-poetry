@@ -124,41 +124,56 @@ class SearchService:
         limit: int,
         offset: int,
     ) -> dict:
-        """Fallback search using PostgreSQL ILIKE when Meilisearch is unavailable."""
+        """Search using PostgreSQL with relevance ranking — exact matches first."""
         try:
-            where = ["v.full_verse_normalized ILIKE :q"]
-            params: dict = {"q": f"%{query}%", "limit": limit, "offset": offset}
+            filter_clauses = []
+            params: dict = {"q_exact": f"%{query}%", "limit": limit, "offset": offset}
+
+            # Split query into individual words for word-level matching
+            words = [w.strip() for w in query.split() if len(w.strip()) > 1]
+            word_likes = []
+            for i, word in enumerate(words[:6]):
+                key = f"w{i}"
+                word_likes.append(f"v.full_verse_normalized ILIKE :{key}")
+                params[key] = f"%{word}%"
 
             if filters.get("poet_id"):
-                where.append("v.poet_id = CAST(:poet_id AS UUID)")
+                filter_clauses.append("v.poet_id = CAST(:poet_id AS UUID)")
                 params["poet_id"] = filters["poet_id"]
             if filters.get("era"):
-                where.append("p.era = :era")
+                filter_clauses.append("p.era = :era")
                 params["era"] = filters["era"]
             if filters.get("is_famous"):
-                where.append("v.is_famous = true")
+                filter_clauses.append("v.is_famous = true")
 
-            where_sql = " AND ".join(where)
+            filter_sql = (" AND " + " AND ".join(filter_clauses)) if filter_clauses else ""
+
+            # Search with relevance scoring:
+            # Score 3: exact phrase match
+            # Score 2: all words match
+            # Score 1: any word matches
+            all_words_clause = " AND ".join(word_likes) if word_likes else "TRUE"
+            any_words_clause = " OR ".join(word_likes) if word_likes else "TRUE"
+
             sql = text(f"""
                 SELECT
                     v.id::text, v.full_verse, v.hemistich_1, v.hemistich_2,
                     v.poet_name_ar, v.poet_slug, v.poem_title_ar, v.poem_slug,
-                    v.poet_id::text, v.poem_id::text, v.is_famous
+                    v.poet_id::text, v.poem_id::text, v.is_famous,
+                    CASE
+                        WHEN v.full_verse_normalized ILIKE :q_exact THEN 3
+                        WHEN {all_words_clause} THEN 2
+                        ELSE 1
+                    END AS relevance
                 FROM verses v
                 LEFT JOIN poems p ON p.id = v.poem_id
-                WHERE {where_sql}
-                ORDER BY v.view_count DESC
+                WHERE ({any_words_clause}){filter_sql}
+                ORDER BY relevance DESC, v.view_count DESC
                 LIMIT :limit OFFSET :offset
-            """)
-            count_sql = text(f"""
-                SELECT COUNT(*) FROM verses v
-                LEFT JOIN poems p ON p.id = v.poem_id
-                WHERE {where_sql}
             """)
 
             rows = await self.db.execute(sql, params)
-            total = await self.db.execute(count_sql, {k: v for k, v in params.items() if k not in ("limit", "offset")})
-            total_count = total.scalar() or 0
+            results = rows.fetchall()
 
             hits = [
                 {
@@ -169,10 +184,10 @@ class SearchService:
                     "poet_id": r.poet_id, "poem_id": r.poem_id,
                     "is_famous": r.is_famous,
                 }
-                for r in rows.fetchall()
+                for r in results
             ]
 
-            return {"hits": hits, "estimated_total_hits": total_count, "mode": "postgres"}
+            return {"hits": hits, "estimated_total_hits": len(hits), "mode": "postgres"}
         except Exception as e:
             logger.error(f"PostgreSQL search error: {e}")
             return {"hits": [], "estimated_total_hits": 0, "mode": "postgres"}
