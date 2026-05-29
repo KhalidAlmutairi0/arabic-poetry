@@ -114,8 +114,68 @@ class SearchService:
                 "mode": "keyword",
             }
         except Exception as e:
-            logger.error(f"Meilisearch error: {e}")
-            return {"hits": [], "estimated_total_hits": 0, "mode": "keyword"}
+            logger.warning(f"Meilisearch unavailable ({e}), falling back to PostgreSQL search")
+            return await self._postgres_search(normalized_query, filters, limit, offset)
+
+    async def _postgres_search(
+        self,
+        query: str,
+        filters: dict,
+        limit: int,
+        offset: int,
+    ) -> dict:
+        """Fallback search using PostgreSQL ILIKE when Meilisearch is unavailable."""
+        try:
+            where = ["v.full_verse_normalized ILIKE :q"]
+            params: dict = {"q": f"%{query}%", "limit": limit, "offset": offset}
+
+            if filters.get("poet_id"):
+                where.append("v.poet_id = CAST(:poet_id AS UUID)")
+                params["poet_id"] = filters["poet_id"]
+            if filters.get("era"):
+                where.append("p.era = :era")
+                params["era"] = filters["era"]
+            if filters.get("is_famous"):
+                where.append("v.is_famous = true")
+
+            where_sql = " AND ".join(where)
+            sql = text(f"""
+                SELECT
+                    v.id::text, v.full_verse, v.hemistich_1, v.hemistich_2,
+                    v.poet_name_ar, v.poet_slug, v.poem_title_ar, v.poem_slug,
+                    v.poet_id::text, v.poem_id::text, v.is_famous
+                FROM verses v
+                LEFT JOIN poems p ON p.id = v.poem_id
+                WHERE {where_sql}
+                ORDER BY v.view_count DESC
+                LIMIT :limit OFFSET :offset
+            """)
+            count_sql = text(f"""
+                SELECT COUNT(*) FROM verses v
+                LEFT JOIN poems p ON p.id = v.poem_id
+                WHERE {where_sql}
+            """)
+
+            rows = await self.db.execute(sql, params)
+            total = await self.db.execute(count_sql, {k: v for k, v in params.items() if k not in ("limit", "offset")})
+            total_count = total.scalar() or 0
+
+            hits = [
+                {
+                    "id": r.id, "full_verse": r.full_verse,
+                    "hemistich_1": r.hemistich_1, "hemistich_2": r.hemistich_2,
+                    "poet_name_ar": r.poet_name_ar, "poet_slug": r.poet_slug,
+                    "poem_title_ar": r.poem_title_ar, "poem_slug": r.poem_slug,
+                    "poet_id": r.poet_id, "poem_id": r.poem_id,
+                    "is_famous": r.is_famous,
+                }
+                for r in rows.fetchall()
+            ]
+
+            return {"hits": hits, "estimated_total_hits": total_count, "mode": "postgres"}
+        except Exception as e:
+            logger.error(f"PostgreSQL search error: {e}")
+            return {"hits": [], "estimated_total_hits": 0, "mode": "postgres"}
 
     # ──────────────────────────────────────────────────
     # SEMANTIC SEARCH (pgvector)
