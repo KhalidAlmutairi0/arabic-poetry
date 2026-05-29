@@ -401,22 +401,29 @@ def create_app() -> FastAPI:
                         title = (row.get("poem_title") or "").strip()
                         verses_list = row.get("poem_verses") or []
                         text = row.get("text") or ""
-                        meter = row.get("poem_meter") or ""
+                        raw_meter = row.get("poem_meter")
                         era = (row.get("poet_era") or "").strip()
+
+                        # poem_meter is a class label index (int) — map to name
+                        METER_NAMES = ["البسيط", "الخفيف", "الرجز", "الرمل", "السريع", "الطويل", "الكامل", "المتدارك", "المتقارب", "المجتث", "المديد", "المقتضب", "المنسرح", "المواليا", "الهزج", "الوافر", "عامي"]
+                        if isinstance(raw_meter, int) and 0 <= raw_meter < len(METER_NAMES):
+                            meter = METER_NAMES[raw_meter]
+                        elif isinstance(raw_meter, str) and raw_meter not in ("", "nan"):
+                            meter = raw_meter
+                        else:
+                            meter = ""
 
                         if not poet_name:
                             continue
 
                         # Build text from verses list if available
                         if verses_list and isinstance(verses_list, list):
-                            text = "\n".join(v for v in verses_list if v and isinstance(v, str))
+                            text = "\n".join(str(v) for v in verses_list if v)
 
                         if not text or len(text) < 10:
                             continue
                         if not title:
                             title = text.split("\n")[0][:60] or "قصيدة"
-                        if meter == "nan" or meter is None:
-                            meter = ""
 
                         poems_data.append({"poet_name": poet_name, "title": title, "text": text, "meter": meter or None, "era": era})
 
