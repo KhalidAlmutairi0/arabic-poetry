@@ -127,6 +127,13 @@ def create_app() -> FastAPI:
         response.headers["X-Process-Time-Ms"] = f"{process_time:.0f}"
         return response
 
+    # ── Show errors in responses (debug) ────────────────
+    @app.exception_handler(Exception)
+    async def generic_exception_handler(request: Request, exc: Exception):
+        import traceback
+        logger.error(f"Unhandled: {exc}\n{traceback.format_exc()}")
+        return JSONResponse(status_code=500, content={"error": str(exc)[:500]})
+
     # ── Exception handlers ────────────────────────────
     @app.exception_handler(NotFoundException)
     async def not_found_handler(request: Request, exc: NotFoundException):

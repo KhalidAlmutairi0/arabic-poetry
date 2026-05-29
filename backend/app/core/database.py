@@ -20,13 +20,18 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-# Async engine
+# Async engine — disable prepared statements for Supabase pooler compatibility
+_connect_args = {}
+if "pooler.supabase.com" in settings.async_database_url or "supabase" in settings.async_database_url:
+    _connect_args["prepared_statement_cache_size"] = 0
+
 engine = create_async_engine(
     settings.async_database_url,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
     echo=settings.db_echo,
     pool_pre_ping=True,
+    connect_args=_connect_args,
 )
 
 # Session factory
