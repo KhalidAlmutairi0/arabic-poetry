@@ -132,7 +132,10 @@
       "PowerShell(railway version *)",
       "PowerShell(railway *)",
       "PowerShell(railway whoami *)",
-      "PowerShell(npm list *)"
+      "PowerShell(npm list *)",
+      "WebFetch(domain:poetry-backend-36qe.onrender.com)",
+      "Bash(curl -s \"https://poetry-backend-36qe.onrender.com/api/v1/categories/\")",
+      "Bash(curl *)"
     ]
   }
 }

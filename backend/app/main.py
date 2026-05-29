@@ -36,12 +36,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ Table creation failed: {e}")
 
-    # Initialize Meilisearch indices
-    try:
-        await _setup_meilisearch()
-        logger.info("✅ Meilisearch ready")
-    except Exception as e:
-        logger.warning(f"⚠️ Meilisearch setup failed (non-critical): {e}")
+    # Initialize Meilisearch indices (skip if URL not configured)
+    if settings.meilisearch_url:
+        try:
+            await _setup_meilisearch()
+            logger.info("✅ Meilisearch ready")
+        except Exception as e:
+            logger.warning(f"⚠️ Meilisearch setup failed (non-critical): {e}")
+    else:
+        logger.info("ℹ️ Meilisearch not configured — search uses discovery only")
 
     # Test Redis
     try:
@@ -101,8 +104,8 @@ def create_app() -> FastAPI:
         title="شعر — Arabic Poetry Platform",
         description="Production-grade Arabic poetry search and discovery platform",
         version=settings.app_version,
-        docs_url="/docs" if settings.is_development else None,
-        redoc_url="/redoc" if settings.is_development else None,
+        docs_url="/docs",
+        redoc_url="/redoc",
         lifespan=lifespan,
     )
 
@@ -165,6 +168,129 @@ def create_app() -> FastAPI:
             "version": settings.app_version,
             "docs": "/docs",
         }
+
+    # ── Remote seed endpoint ─────────────────────────
+    @app.post("/admin/seed", tags=["system"])
+    async def seed_database(key: str = ""):
+        if key != settings.secret_key:
+            return {"error": "unauthorized"}
+
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy import text
+        from app.models import Poet, Poem, Verse, Category, PoemCategory
+        from app.utils.arabic_normalizer import normalizer
+        import uuid
+
+        engine = create_async_engine(settings.async_database_url)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with engine.begin() as conn:
+            try:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            except Exception:
+                pass
+
+        from app.core.database import Base
+        import app.models as _m
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        CATEGORIES = [
+            {"name_ar": "الغزل والحب", "name_en": "Love", "slug": "love", "icon": "heart", "color": "#E74C3C", "display_order": 1},
+            {"name_ar": "الحكمة", "name_en": "Wisdom", "slug": "wisdom", "icon": "moon", "color": "#8E44AD", "display_order": 2},
+            {"name_ar": "الفخر", "name_en": "Pride", "slug": "pride", "icon": "sword", "color": "#E67E22", "display_order": 3},
+            {"name_ar": "الرثاء", "name_en": "Elegy", "slug": "elegy", "icon": "dove", "color": "#95A5A6", "display_order": 4},
+            {"name_ar": "الشوق والحنين", "name_en": "Longing", "slug": "longing", "icon": "wave", "color": "#3498DB", "display_order": 5},
+            {"name_ar": "الوصف", "name_en": "Description", "slug": "description", "icon": "leaf", "color": "#27AE60", "display_order": 6},
+            {"name_ar": "المدح", "name_en": "Praise", "slug": "praise", "icon": "crown", "color": "#F1C40F", "display_order": 7},
+            {"name_ar": "الطبيعة", "name_en": "Nature", "slug": "nature", "icon": "flower", "color": "#1ABC9C", "display_order": 8},
+        ]
+
+        POETS = [
+            {"name_ar": "أبو الطيب المتنبي", "name_en": "Al-Mutanabbi", "slug": "almutanabbi", "bio_ar": "أعظم شعراء العرب", "era": "abbasid", "birth_year": 915, "death_year": 965, "is_verified": True, "poem_count": 0, "verse_count": 0},
+            {"name_ar": "امرؤ القيس", "name_en": "Imru al-Qays", "slug": "imrualqays", "bio_ar": "صاحب المعلقة الشهيرة", "era": "pre_islamic", "death_year": 540, "is_verified": True, "poem_count": 0, "verse_count": 0},
+            {"name_ar": "محمود درويش", "name_en": "Mahmoud Darwish", "slug": "mahmouddarwish", "bio_ar": "شاعر المقاومة الفلسطينية", "era": "contemporary", "birth_year": 1941, "death_year": 2008, "is_verified": True, "poem_count": 0, "verse_count": 0},
+            {"name_ar": "نزار قباني", "name_en": "Nizar Qabbani", "slug": "nizarqabbani", "bio_ar": "شاعر الحب والمرأة", "era": "contemporary", "birth_year": 1923, "death_year": 1998, "is_verified": True, "poem_count": 0, "verse_count": 0},
+            {"name_ar": "أحمد شوقي", "name_en": "Ahmad Shawqi", "slug": "ahmadshawqi", "bio_ar": "أمير الشعراء", "era": "modern", "birth_year": 1868, "death_year": 1932, "is_verified": True, "poem_count": 0, "verse_count": 0},
+            {"name_ar": "الخنساء", "name_en": "Al-Khansa", "slug": "alkhansa", "bio_ar": "أعظم شاعرات العرب", "era": "pre_islamic", "birth_year": 575, "death_year": 664, "is_verified": True, "poem_count": 0, "verse_count": 0},
+        ]
+
+        POEMS = [
+            {"poet_slug": "almutanabbi", "title_ar": "على قدر أهل العزم", "slug": "almutanabbi-ala-qadri", "meter": "البسيط", "era": "abbasid", "categories": ["pride", "wisdom"], "verses": [
+                ("عَلى قَدرِ أَهلِ العَزمِ تَأتي العَزائِمُ", "وَتَأتي عَلى قَدرِ الكِرامِ المَكارِمُ", True),
+                ("وَتَعظُمُ في عَينِ الصَغيرِ صِغارُها", "وَتَصغُرُ في عَينِ العَظيمِ العَظائِمُ", True),
+                ("يُكَلِّفُ سَيفُ الدَولَةِ الجَيشَ هَمَّهُ", "وَقَد عَجَزَت عَنهُ الجُيوشُ الخَضارِمُ", False),
+            ]},
+            {"poet_slug": "almutanabbi", "title_ar": "الخيل والليل والبيداء", "slug": "almutanabbi-alkhayl", "meter": "الطويل", "era": "abbasid", "categories": ["pride", "description"], "verses": [
+                ("الخَيلُ وَاللَيلُ وَالبَيداءُ تَعرِفُني", "وَالسَيفُ وَالرُمحُ وَالقِرطاسُ وَالقَلَمُ", True),
+                ("أَنا الَّذي نَظَرَ الأَعمى إِلى أَدَبي", "وَأَسمَعَت كَلِماتي مَن بِهِ صَمَمُ", True),
+                ("أَنامُ مِلءَ جُفوني عَن شَوارِدِها", "وَيَسهَرُ الخَلقُ جَرّاها وَيَختَصِمُ", True),
+            ]},
+            {"poet_slug": "imrualqays", "title_ar": "معلقة امرئ القيس", "slug": "imrualqays-muallaqah", "meter": "الطويل", "era": "pre_islamic", "categories": ["love", "description"], "verses": [
+                ("قِفا نَبكِ مِن ذِكرى حَبيبٍ وَمَنزِلِ", "بِسِقطِ اللِوى بَينَ الدَخولِ فَحَومَلِ", True),
+                ("وَإِنَّ شِفائي عَبرَةٌ مُهَراقَةٌ", "فَهَل عِندَ رَسمٍ دارِسٍ مِن مُعَوَّلِ", True),
+            ]},
+            {"poet_slug": "mahmouddarwish", "title_ar": "على هذه الأرض", "slug": "darwish-ala-hathihi", "meter": "التفعيلة", "era": "contemporary", "categories": ["longing"], "verses": [
+                ("على هذه الأرض ما يستحق الحياة", "", True),
+                ("على هذه الأرض سيدة الأرض أم الابتداء", "", False),
+            ]},
+            {"poet_slug": "nizarqabbani", "title_ar": "قارئة الفنجان", "slug": "qabbani-qariate", "meter": "التفعيلة", "era": "contemporary", "categories": ["love"], "verses": [
+                ("جلست والخوف بعينيها", "تتأمل فنجاني المقلوب", True),
+                ("قالت يا ولدي لا تحزن", "فالحب عليك هو المكتوب", True),
+            ]},
+            {"poet_slug": "ahmadshawqi", "title_ar": "نهج البردة", "slug": "shawqi-nahj-alburdah", "meter": "البسيط", "era": "modern", "categories": ["praise"], "verses": [
+                ("رِيمٌ عَلى القاعِ بَينَ البانِ وَالعَلَمِ", "أَحَلَّ سَفكَ دَمي في الأَشهُرِ الحُرُمِ", True),
+                ("وَما نَيلُ المَطالِبِ بِالتَمَنّي", "وَلَكِن تُؤخَذُ الدُنيا غِلابا", True),
+            ]},
+            {"poet_slug": "alkhansa", "title_ar": "رثاء صخر", "slug": "alkhansa-rithaa-sakhr", "meter": "الوافر", "era": "pre_islamic", "categories": ["elegy"], "verses": [
+                ("وَإِنَّ صَخراً لَتَأتَمُّ الهُداةُ بِهِ", "كَأَنَّهُ عَلَمٌ في رَأسِهِ نارُ", True),
+                ("قَذى بِعَينِكِ أَم بِالعَينِ عُوّارُ", "أَم ذَرَفَت إِذ خَلَت مِن أَهلِها الدّارُ", True),
+            ]},
+        ]
+
+        async with Session() as session:
+            from sqlalchemy import select, func
+            existing = (await session.execute(select(func.count()).select_from(Poet))).scalar()
+            if existing and existing > 0:
+                return {"message": f"Database already has {existing} poets, skipping seed"}
+
+            cat_map = {}
+            for cd in CATEGORIES:
+                cat = Category(**cd)
+                session.add(cat)
+                await session.flush()
+                cat_map[cd["slug"]] = cat
+
+            poet_map = {}
+            for pd in POETS:
+                poet = Poet(**pd)
+                session.add(poet)
+                await session.flush()
+                poet_map[pd["slug"]] = poet
+
+            total_verses = 0
+            for pmd in POEMS:
+                poet = poet_map[pmd["poet_slug"]]
+                full_text = "\n".join(f"{h1} *** {h2}" if h2 else h1 for h1, h2, _ in pmd["verses"])
+                poem = Poem(poet_id=poet.id, title_ar=pmd["title_ar"], slug=pmd["slug"], full_text=full_text, meter=pmd.get("meter"), verse_count=len(pmd["verses"]), era=pmd.get("era"), is_verified=True, is_published=True)
+                session.add(poem)
+                await session.flush()
+
+                for cs in pmd.get("categories", []):
+                    if cs in cat_map:
+                        session.add(PoemCategory(poem_id=poem.id, category_id=cat_map[cs].id))
+
+                for i, (h1, h2, famous) in enumerate(pmd["verses"], 1):
+                    fv = f"{h1} *** {h2}" if h2 else h1
+                    session.add(Verse(poem_id=poem.id, poet_id=poet.id, position=i, hemistich_1=h1, hemistich_2=h2 or None, full_verse=fv, full_verse_normalized=normalizer.normalize(fv), hemistich_1_normalized=normalizer.normalize(h1), hemistich_2_normalized=normalizer.normalize(h2) if h2 else None, poet_name_ar=poet.name_ar, poet_slug=poet.slug, poem_title_ar=pmd["title_ar"], poem_slug=pmd["slug"], is_famous=famous))
+                    total_verses += 1
+
+                poet.poem_count += 1
+                poet.verse_count += len(pmd["verses"])
+
+            await session.commit()
+
+        return {"message": f"Seeded {len(POETS)} poets, {len(POEMS)} poems, {total_verses} verses, {len(CATEGORIES)} categories"}
 
     return app
 
