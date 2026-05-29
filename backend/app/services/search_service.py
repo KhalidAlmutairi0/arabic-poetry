@@ -127,7 +127,8 @@ class SearchService:
         """Search using PostgreSQL with relevance ranking — exact matches first."""
         try:
             filter_clauses = []
-            params: dict = {"q_exact": f"%{query}%", "limit": limit, "offset": offset}
+            first_word = words[0] if words else query
+            params: dict = {"q_exact": f"%{query}%", "q_word": f"%{first_word}%", "limit": limit, "offset": offset}
 
             # Split query into individual words for word-level matching
             words = [w.strip() for w in query.split() if len(w.strip()) > 1]
@@ -161,14 +162,22 @@ class SearchService:
                     v.poet_name_ar, v.poet_slug, v.poem_title_ar, v.poem_slug,
                     v.poet_id::text, v.poem_id::text, v.is_famous,
                     CASE
-                        WHEN v.full_verse_normalized ILIKE :q_exact THEN 3
-                        WHEN {all_words_clause} THEN 2
+                        WHEN v.poet_name_ar ILIKE :q_exact THEN 10
+                        WHEN v.full_verse_normalized ILIKE :q_exact THEN 8
+                        WHEN v.poem_title_ar ILIKE :q_exact THEN 7
+                        WHEN {all_words_clause} AND v.poet_name_ar ILIKE :q_exact THEN 9
+                        WHEN {all_words_clause} THEN 5
+                        WHEN v.poet_name_ar ILIKE :q_word THEN 4
                         ELSE 1
                     END AS relevance
                 FROM verses v
                 LEFT JOIN poems p ON p.id = v.poem_id
-                WHERE ({any_words_clause}){filter_sql}
-                ORDER BY relevance DESC, v.view_count DESC
+                WHERE (
+                    v.poet_name_ar ILIKE :q_exact
+                    OR v.poem_title_ar ILIKE :q_exact
+                    OR ({any_words_clause})
+                ){filter_sql}
+                ORDER BY relevance DESC, v.is_famous DESC, v.view_count DESC
                 LIMIT :limit OFFSET :offset
             """)
 
