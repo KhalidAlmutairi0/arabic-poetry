@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Environment
+.env
+.env.local
+backend/.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Cache files (large, re-fetchable)
+backend/scripts/qafiyah_cache.json
+backend/scripts/deep_cache.json
+backend/scripts/deep_cache2.json
+backend/scripts/qafiyah.dump
+backend/scripts/fetch_state.json
+backend/scripts/ashaar_data/
+
+# Docker
+postgres_data/
+redis_data/
+meilisearch_data/
+ollama_data/

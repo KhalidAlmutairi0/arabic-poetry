@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: poetry_postgres
+    environment:
+      POSTGRES_DB: poetry_db
+      POSTGRES_USER: poetry_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poetry_secret_123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poetry_user -d poetry_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: poetry_redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.9
+    container_name: poetry_meilisearch
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_MASTER_KEY:-meili_master_key_dev}
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_ENV: development
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: poetry_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Pull model on first start
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull qwen2.5:3b && wait"]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: poetry_backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://poetry_user:${POSTGRES_PASSWORD:-poetry_secret_123}@postgres:5432/poetry_db
+      SYNC_DATABASE_URL: postgresql://poetry_user:${POSTGRES_PASSWORD:-poetry_secret_123}@postgres:5432/poetry_db
+      REDIS_URL: redis://redis:6379/0
+      MEILISEARCH_URL: http://meilisearch:7700
+      MEILISEARCH_KEY: ${MEILISEARCH_MASTER_KEY:-meili_master_key_dev}
+      OLLAMA_URL: http://ollama:11434
+      SECRET_KEY: ${SECRET_KEY:-dev_secret_key_change_in_production}
+      ENVIRONMENT: development
+      DEBUG: "true"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  meilisearch_data:
+  ollama_data:
