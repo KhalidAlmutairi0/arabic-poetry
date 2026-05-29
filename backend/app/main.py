@@ -311,8 +311,7 @@ def create_app() -> FastAPI:
         return _import_status
 
     async def _run_ashaar_import():
-        import csv
-        import io
+        import asyncio
         import re
         import httpx
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -368,36 +367,61 @@ def create_app() -> FastAPI:
             return verses[:80]
 
         try:
-            # Download CSV
-            logger.info("Ashaar import: downloading dataset...")
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                r = await client.get("https://raw.githubusercontent.com/ARBML/Ashaar/main/data/ashaar.csv")
-                r.raise_for_status()
-                csv_text = r.text
+            # Download parquet from HuggingFace
+            logger.info("Ashaar import: downloading dataset from HuggingFace...")
+            import struct
 
-            logger.info(f"Ashaar import: downloaded {len(csv_text)} bytes")
+            PARQUET_URLS = [
+                "https://huggingface.co/api/datasets/arbml/Ashaar_dataset/parquet/default/train/0.parquet",
+                "https://huggingface.co/api/datasets/arbml/Ashaar_dataset/parquet/default/train/1.parquet",
+            ]
 
-            reader = csv.DictReader(io.StringIO(csv_text))
-            rows = list(reader)
-            logger.info(f"Ashaar import: {len(rows)} rows in CSV")
-
-            # Parse poems
+            # Use HF rows API instead of downloading full parquet (no pyarrow needed)
             poems_data = []
-            for row in rows:
-                poet_name = (row.get("poet_name", "") or row.get("poet", "") or "").strip()
-                title = (row.get("poem_title", "") or row.get("title", "") or "").strip()
-                text = (row.get("poem_text", "") or row.get("text", "") or row.get("verses", "") or "").strip()
-                meter = (row.get("meter", "") or row.get("البحر", "") or "").strip()
-                era = (row.get("era", "") or row.get("العصر", "") or "").strip()
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                offset = 0
+                batch_size = 100
+                max_rows = 50000  # limit to 50K poems to stay within free tier DB limits
+                while offset < max_rows:
+                    url = f"https://datasets-server.huggingface.co/rows?dataset=arbml%2FAshaar_dataset&config=default&split=train&offset={offset}&length={batch_size}"
+                    r = await client.get(url)
+                    if r.status_code != 200:
+                        logger.warning(f"HF API returned {r.status_code} at offset {offset}")
+                        break
+                    data = r.json()
+                    rows = data.get("rows", [])
+                    if not rows:
+                        break
 
-                if not poet_name or not text or len(text) < 10:
-                    continue
-                if not title:
-                    title = text.split("\n")[0][:60] or "قصيدة"
-                if meter == "nan":
-                    meter = ""
+                    for item in rows:
+                        row = item.get("row", {})
+                        poet_name = (row.get("poet_name") or "").strip()
+                        title = (row.get("poem_title") or "").strip()
+                        verses_list = row.get("poem_verses") or []
+                        text = row.get("text") or ""
+                        meter = row.get("poem_meter") or ""
+                        era = (row.get("poet_era") or "").strip()
 
-                poems_data.append({"poet_name": poet_name, "title": title, "text": text, "meter": meter or None, "era": era})
+                        if not poet_name:
+                            continue
+
+                        # Build text from verses list if available
+                        if verses_list and isinstance(verses_list, list):
+                            text = "\n".join(v for v in verses_list if v and isinstance(v, str))
+
+                        if not text or len(text) < 10:
+                            continue
+                        if not title:
+                            title = text.split("\n")[0][:60] or "قصيدة"
+                        if meter == "nan" or meter is None:
+                            meter = ""
+
+                        poems_data.append({"poet_name": poet_name, "title": title, "text": text, "meter": meter or None, "era": era})
+
+                    offset += batch_size
+                    if offset % 5000 == 0:
+                        logger.info(f"Ashaar import: fetched {offset} rows, {len(poems_data)} valid poems...")
+                    await asyncio.sleep(0.1)
 
             logger.info(f"Ashaar import: {len(poems_data)} valid poems parsed")
 
