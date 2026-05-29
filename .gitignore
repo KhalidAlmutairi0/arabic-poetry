@@ -40,3 +40,4 @@ postgres_data/
 redis_data/
 meilisearch_data/
 ollama_data/
+meilisearch/
