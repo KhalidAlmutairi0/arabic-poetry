@@ -292,36 +292,22 @@ def create_app() -> FastAPI:
 
         return {"message": f"Seeded {len(POETS)} poets, {len(POEMS)} poems, {total_verses} verses, {len(CATEGORIES)} categories"}
 
-    # ── Ashaar dataset import (background) ──────────
-    app.state.import_status = {"running": False, "poets": 0, "poems": 0, "verses": 0, "done": False, "error": None}
+    # ── Ashaar dataset import (batch mode) ───────────
+    app.state.ashaar_cache = None  # holds fetched poems between batch calls
+    app.state.ashaar_offset = 0
+    app.state.import_totals = {"poets": 0, "poems": 0, "verses": 0}
 
     @app.post("/admin/import-ashaar", tags=["system"])
-    async def import_ashaar(key: str = ""):
+    async def import_ashaar(key: str = "", batch_size: int = 200):
         if key != settings.secret_key:
             return {"error": "unauthorized"}
-        if app.state.import_status["running"]:
-            return {"status": "already running", **app.state.import_status}
 
-        import asyncio
-        app.state.import_status.update(running=True, poets=0, poems=0, verses=0, done=False, error=None)
-        asyncio.create_task(_run_ashaar_import())
-        return {"status": "started", "message": "Import running in background. Check /admin/import-status for progress."}
-
-    @app.get("/admin/import-status", tags=["system"])
-    async def import_status():
-        return app.state.import_status
-
-    async def _run_ashaar_import():
-        import asyncio
         import re
         import httpx
-        status = app.state.import_status
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-        from sqlalchemy import select, func
-        from app.models import Poet, Poem, Verse, Category
+        from sqlalchemy import select
+        from app.models import Poet, Poem, Verse
         from app.utils.arabic_normalizer import normalizer
-
-        status.update(running=True, poets=0, poems=0, verses=0, done=False, error=None)
 
         ERA_MAP = {
             "العصر الجاهلي": "pre_islamic", "الجاهلي": "pre_islamic",
@@ -334,6 +320,7 @@ def create_app() -> FastAPI:
             "العصر الحديث": "modern", "الحديث": "modern",
             "العصر المعاصر": "contemporary", "المعاصر": "contemporary",
         }
+        METER_NAMES = ["البسيط", "الخفيف", "الرجز", "الرمل", "السريع", "الطويل", "الكامل", "المتدارك", "المتقارب", "المجتث", "المديد", "المقتضب", "المنسرح", "المواليا", "الهزج", "الوافر", "عامي"]
 
         def map_era(s):
             for ar, slug in ERA_MAP.items():
@@ -344,10 +331,9 @@ def create_app() -> FastAPI:
         def make_slug(text):
             try:
                 from unidecode import unidecode
-                slug = re.sub(r"[^a-z0-9]+", "-", unidecode(text).lower()).strip("-")
+                return re.sub(r"[^a-z0-9]+", "-", unidecode(text).lower()).strip("-")[:200] or "unknown"
             except Exception:
-                slug = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
-            return slug[:200] or "unknown"
+                return re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()[:200] or "unknown"
 
         def parse_verses(text):
             verses = []
@@ -360,38 +346,24 @@ def create_app() -> FastAPI:
                     if sep in line:
                         parts = [p.strip() for p in line.split(sep, 1) if p.strip()]
                         break
-                if parts and len(parts) == 2:
-                    h1, h2 = parts
-                else:
-                    h1, h2 = line, ""
+                h1, h2 = (parts[0], parts[1]) if parts and len(parts) == 2 else (line, "")
                 if len(h1) > 2:
                     verses.append((h1, h2))
             return verses[:80]
 
         try:
-            # Download parquet from HuggingFace
-            logger.info("Ashaar import: downloading dataset from HuggingFace...")
-            import struct
-
-            PARQUET_URLS = [
-                "https://huggingface.co/api/datasets/arbml/Ashaar_dataset/parquet/default/train/0.parquet",
-                "https://huggingface.co/api/datasets/arbml/Ashaar_dataset/parquet/default/train/1.parquet",
-            ]
-
-            # Use HF rows API instead of downloading full parquet (no pyarrow needed)
+            # Fetch batch from HuggingFace rows API
+            hf_offset = app.state.ashaar_offset
             poems_data = []
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                offset = 0
-                batch_size = 100
-                max_rows = 50000  # limit to 50K poems to stay within free tier DB limits
-                while offset < max_rows:
-                    url = f"https://datasets-server.huggingface.co/rows?dataset=arbml%2FAshaar_dataset&config=default&split=train&offset={offset}&length={batch_size}"
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                fetched = 0
+                while fetched < batch_size:
+                    url = f"https://datasets-server.huggingface.co/rows?dataset=arbml%2FAshaar_dataset&config=default&split=train&offset={hf_offset}&length=100"
                     r = await client.get(url)
                     if r.status_code != 200:
-                        logger.warning(f"HF API returned {r.status_code} at offset {offset}")
                         break
-                    data = r.json()
-                    rows = data.get("rows", [])
+                    rows = r.json().get("rows", [])
                     if not rows:
                         break
 
@@ -404,84 +376,63 @@ def create_app() -> FastAPI:
                         raw_meter = row.get("poem_meter")
                         era = (row.get("poet_era") or "").strip()
 
-                        # poem_meter is a class label index (int) — map to name
-                        METER_NAMES = ["البسيط", "الخفيف", "الرجز", "الرمل", "السريع", "الطويل", "الكامل", "المتدارك", "المتقارب", "المجتث", "المديد", "المقتضب", "المنسرح", "المواليا", "الهزج", "الوافر", "عامي"]
                         if isinstance(raw_meter, int) and 0 <= raw_meter < len(METER_NAMES):
                             meter = METER_NAMES[raw_meter]
                         elif isinstance(raw_meter, str) and raw_meter not in ("", "nan"):
-                            meter = raw_meter
+                            meter = str(raw_meter)
                         else:
-                            meter = ""
+                            meter = None
 
                         if not poet_name:
                             continue
-
-                        # Build text from verses list if available
                         if verses_list and isinstance(verses_list, list):
                             text = "\n".join(str(v) for v in verses_list if v)
-
                         if not text or len(text) < 10:
                             continue
                         if not title:
                             title = text.split("\n")[0][:60] or "قصيدة"
 
-                        poems_data.append({"poet_name": poet_name, "title": title, "text": text, "meter": meter or None, "era": era})
+                        poems_data.append({"poet_name": poet_name, "title": title, "text": text, "meter": meter, "era": era})
 
-                    offset += batch_size
-                    if offset % 5000 == 0:
-                        logger.info(f"Ashaar import: fetched {offset} rows, {len(poems_data)} valid poems...")
-                    await asyncio.sleep(0.1)
+                    hf_offset += 100
+                    fetched += 100
 
-            logger.info(f"Ashaar import: {len(poems_data)} valid poems parsed")
+            app.state.ashaar_offset = hf_offset
 
-            # Import to DB
+            if not poems_data:
+                return {"status": "done", "message": "No more data to import", **app.state.import_totals, "hf_offset": hf_offset}
+
+            # Import batch to DB
             engine = create_async_engine(settings.async_database_url, echo=False)
             Session = async_sessionmaker(engine, expire_on_commit=False)
 
+            added_poets = 0
+            added_poems = 0
+            added_verses = 0
+
             async with Session() as session:
-                existing_poet_slugs = set(r[0] for r in (await session.execute(select(Poet.slug))).fetchall())
                 existing_poem_slugs = set(r[0] for r in (await session.execute(select(Poem.slug))).fetchall())
 
-                poet_cache = {}
-                for slug in existing_poet_slugs:
-                    p = (await session.execute(select(Poet).where(Poet.slug == slug))).scalar_one_or_none()
-                    if p:
-                        poet_cache[slug] = p
-
-                added_poets = 0
-                added_poems = 0
-                added_verses = 0
-
-                for idx, pd in enumerate(poems_data):
+                for pd in poems_data:
                     poet_slug = make_slug(pd["poet_name"])
-
-                    if poet_slug not in poet_cache:
-                        if poet_slug in existing_poet_slugs:
-                            p = (await session.execute(select(Poet).where(Poet.slug == poet_slug))).scalar_one_or_none()
-                            if p:
-                                poet_cache[poet_slug] = p
-                            else:
-                                continue
-                        else:
-                            p = Poet(name_ar=pd["poet_name"], slug=poet_slug, bio_ar="شاعر عربي", era=map_era(pd["era"]), nationality_ar="عربي", is_verified=True, poem_count=0, verse_count=0)
-                            session.add(p)
-                            await session.flush()
-                            poet_cache[poet_slug] = p
-                            existing_poet_slugs.add(poet_slug)
-                            added_poets += 1
-
-                    poet = poet_cache[poet_slug]
                     poem_slug = f"{poet_slug}-{make_slug(pd['title'])}"[:580]
-
                     if poem_slug in existing_poem_slugs:
                         continue
+
+                    # Get or create poet
+                    poet = (await session.execute(select(Poet).where(Poet.slug == poet_slug))).scalar_one_or_none()
+                    if not poet:
+                        poet = Poet(name_ar=pd["poet_name"], slug=poet_slug, bio_ar="شاعر عربي", era=map_era(pd["era"]), nationality_ar="عربي", is_verified=True, poem_count=0, verse_count=0)
+                        session.add(poet)
+                        await session.flush()
+                        added_poets += 1
 
                     verses = parse_verses(pd["text"])
                     if not verses:
                         continue
 
                     full_text = "\n".join(f"{h1} *** {h2}" if h2 else h1 for h1, h2 in verses)
-                    poem = Poem(poet_id=poet.id, title_ar=pd["title"], slug=poem_slug, full_text=full_text, meter=pd.get("meter"), verse_count=len(verses), era=map_era(pd.get("era", "")), is_verified=True, is_published=True, source="ashaar/ARBML")
+                    poem = Poem(poet_id=poet.id, title_ar=pd["title"], slug=poem_slug, full_text=full_text, meter=pd["meter"], verse_count=len(verses), era=map_era(pd.get("era", "")), is_verified=True, is_published=True, source="ashaar/ARBML")
                     session.add(poem)
                     await session.flush()
                     existing_poem_slugs.add(poem_slug)
@@ -495,19 +446,22 @@ def create_app() -> FastAPI:
                     poet.poem_count = (poet.poem_count or 0) + 1
                     poet.verse_count = (poet.verse_count or 0) + len(verses)
 
-                    if added_poems % 100 == 0:
-                        await session.commit()
-                        status.update(poets=added_poets, poems=added_poems, verses=added_verses)
-                        logger.info(f"Ashaar import: {added_poets} poets, {added_poems} poems, {added_verses} verses")
-
                 await session.commit()
 
-            status.update(running=False, done=True, poets=added_poets, poems=added_poems, verses=added_verses)
-            logger.info(f"Ashaar import DONE: {added_poets} poets, {added_poems} poems, {added_verses} verses")
+            t = app.state.import_totals
+            t["poets"] += added_poets
+            t["poems"] += added_poems
+            t["verses"] += added_verses
+
+            return {"status": "batch_done", "batch_added": {"poets": added_poets, "poems": added_poems, "verses": added_verses}, "totals": t, "hf_offset": hf_offset, "message": f"Call again to import next batch (offset={hf_offset})"}
 
         except Exception as e:
-            status.update(running=False, done=True, error=str(e))
-            logger.error(f"Ashaar import FAILED: {e}")
+            logger.error(f"Ashaar import batch failed: {e}")
+            return {"status": "error", "error": str(e), "hf_offset": app.state.ashaar_offset, "totals": app.state.import_totals}
+
+    @app.get("/admin/import-status", tags=["system"])
+    async def import_status():
+        return {**app.state.import_totals, "hf_offset": app.state.ashaar_offset}
 
     return app
 
