@@ -473,6 +473,109 @@ def create_app() -> FastAPI:
     async def import_status():
         return {**app.state.import_totals, "hf_offset": app.state.ashaar_offset}
 
+    @app.post("/admin/seed-bulk", tags=["system"])
+    async def seed_bulk(request: Request, key: str = ""):
+        """Accept pre-parsed poems from the local import script."""
+        if key != settings.secret_key:
+            return {"error": "unauthorized"}
+        poems = await request.json()
+        if not poems or not isinstance(poems, list):
+            return {"error": "POST a JSON array of poems"}
+
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy import select
+        from app.models import Poet, Poem, Verse
+        from app.utils.arabic_normalizer import normalizer
+
+        engine = create_async_engine(settings.async_database_url, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+
+        added = 0
+        skipped = 0
+
+        async with Session() as session:
+            existing_slugs = set(r[0] for r in (await session.execute(select(Poem.slug))).fetchall())
+
+            for pd in poems:
+                poem_slug = pd.get("poem_slug", "")[:580]
+                if poem_slug in existing_slugs:
+                    skipped += 1
+                    continue
+
+                poet_slug = pd.get("poet_slug", "")
+                poet_name = pd.get("poet_name", "")
+                if not poet_slug or not poet_name:
+                    skipped += 1
+                    continue
+
+                poet = (await session.execute(select(Poet).where(Poet.slug == poet_slug))).scalar_one_or_none()
+                if not poet:
+                    poet = Poet(
+                        name_ar=poet_name, slug=poet_slug,
+                        bio_ar=pd.get("poet_bio", "شاعر عربي"),
+                        era=pd.get("era", "abbasid"),
+                        nationality_ar="عربي", is_verified=True,
+                        poem_count=0, verse_count=0,
+                    )
+                    session.add(poet)
+                    await session.flush()
+
+                verses_raw = pd.get("verses", [])
+                if not verses_raw:
+                    skipped += 1
+                    continue
+
+                # Parse verse strings into h1/h2
+                verses = []
+                for v in verses_raw:
+                    if not v or len(v) < 3:
+                        continue
+                    for sep in ["***", "\t", "   "]:
+                        if sep in v:
+                            parts = [p.strip() for p in v.split(sep, 1) if p.strip()]
+                            if len(parts) == 2:
+                                verses.append((parts[0], parts[1]))
+                                break
+                    else:
+                        verses.append((v.strip(), ""))
+
+                if not verses:
+                    skipped += 1
+                    continue
+
+                full_text = "\n".join(f"{h1} *** {h2}" if h2 else h1 for h1, h2 in verses)
+                poem = Poem(
+                    poet_id=poet.id, title_ar=pd.get("title", "قصيدة"),
+                    slug=poem_slug, full_text=full_text,
+                    meter=pd.get("meter"), verse_count=len(verses),
+                    era=pd.get("era", "abbasid"),
+                    is_verified=True, is_published=True, source="ashaar/ARBML",
+                )
+                session.add(poem)
+                await session.flush()
+                existing_slugs.add(poem_slug)
+
+                for pos, (h1, h2) in enumerate(verses, 1):
+                    fv = f"{h1} *** {h2}" if h2 else h1
+                    session.add(Verse(
+                        poem_id=poem.id, poet_id=poet.id, position=pos,
+                        hemistich_1=h1, hemistich_2=h2 or None, full_verse=fv,
+                        full_verse_normalized=normalizer.normalize(fv),
+                        hemistich_1_normalized=normalizer.normalize(h1),
+                        hemistich_2_normalized=normalizer.normalize(h2) if h2 else None,
+                        poet_name_ar=poet_name, poet_slug=poet_slug,
+                        poem_title_ar=pd.get("title", ""), poem_slug=poem_slug,
+                        is_famous=False,
+                    ))
+
+                added += 1
+                poet.poem_count = (poet.poem_count or 0) + 1
+                poet.verse_count = (poet.verse_count or 0) + len(verses)
+
+            await session.commit()
+
+        return {"added": added, "skipped": skipped, "total_in_batch": len(poems)}
+
     return app
 
 

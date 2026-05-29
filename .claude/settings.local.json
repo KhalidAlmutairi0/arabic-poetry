@@ -139,7 +139,8 @@
       "Bash(python3 -c ' *)",
       "Bash(python3 -m json.tool)",
       "WebFetch(domain:arabic-poetry-ui.vercel.app)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Total poets: {d[\\\\\"total\\\\\"]}'\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Total poets: {d[\\\\\"total\\\\\"]}'\\)\")",
+      "PowerShell(python -c \"import json, urllib.request; data = json.loads\\(urllib.request.urlopen\\('https://datasets-server.huggingface.co/rows?dataset=arbml%2FAshaar_dataset&config=default&split=train&offset=7000&length=5'\\).read\\(\\)\\); print\\(f'Got {len\\(data[chr\\(114\\)+chr\\(111\\)+chr\\(119\\)+chr\\(115\\)]\\)} rows'\\); print\\(data['rows'][0]['row']['poet_name']\\)\")"
     ]
   }
 }
