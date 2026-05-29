@@ -126,7 +126,9 @@
       "PowerShell(npm install *)",
       "PowerShell(winget install *)",
       "PowerShell(gh auth *)",
-      "PowerShell(git *)"
+      "PowerShell(git *)",
+      "PowerShell(gh repo *)",
+      "Bash(vercel env *)"
     ]
   }
 }

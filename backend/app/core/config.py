@@ -48,7 +48,12 @@ class Settings(BaseSettings):
     rate_limit_default: str = "120/minute"
 
     # ── CORS ──────────────────────────────────────────
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://arabic-poetry-ui.vercel.app",
+        "https://arabic-poetry-ui-*.vercel.app",
+    ]
 
     # ── Cache TTLs (seconds) ──────────────────────────
     cache_ttl_search: int = 3600       # 1 hour
