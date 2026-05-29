@@ -31,7 +31,10 @@ async def get_meili() -> MeiliClient:
 
 async def get_meili_client():
     """AsyncClient must be used as context manager to init httpx session."""
-    async with AsyncClient(
+    if not settings.meilisearch_url:
+        yield None
+        return
+    async with MeiliClient(
         url=settings.meilisearch_url,
         api_key=settings.meilisearch_key,
     ) as client:
