@@ -135,7 +135,10 @@
       "PowerShell(npm list *)",
       "WebFetch(domain:poetry-backend-36qe.onrender.com)",
       "Bash(curl -s \"https://poetry-backend-36qe.onrender.com/api/v1/categories/\")",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m json.tool)",
+      "WebFetch(domain:arabic-poetry-ui.vercel.app)"
     ]
   }
 }

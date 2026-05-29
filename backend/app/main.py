@@ -292,6 +292,190 @@ def create_app() -> FastAPI:
 
         return {"message": f"Seeded {len(POETS)} poets, {len(POEMS)} poems, {total_verses} verses, {len(CATEGORIES)} categories"}
 
+    # ── Ashaar dataset import (background) ──────────
+    _import_status = {"running": False, "poets": 0, "poems": 0, "verses": 0, "done": False, "error": None}
+
+    @app.post("/admin/import-ashaar", tags=["system"])
+    async def import_ashaar(key: str = ""):
+        if key != settings.secret_key:
+            return {"error": "unauthorized"}
+        if _import_status["running"]:
+            return {"status": "already running", **_import_status}
+
+        import asyncio
+        asyncio.create_task(_run_ashaar_import())
+        return {"status": "started", "message": "Import running in background. Check /admin/import-status for progress."}
+
+    @app.get("/admin/import-status", tags=["system"])
+    async def import_status():
+        return _import_status
+
+    async def _run_ashaar_import():
+        import csv
+        import io
+        import re
+        import httpx
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy import select, func
+        from app.models import Poet, Poem, Verse, Category
+        from app.utils.arabic_normalizer import normalizer
+
+        _import_status.update(running=True, poets=0, poems=0, verses=0, done=False, error=None)
+
+        ERA_MAP = {
+            "العصر الجاهلي": "pre_islamic", "الجاهلي": "pre_islamic",
+            "صدر الإسلام": "islamic_early", "عصر صدر الإسلام": "islamic_early",
+            "العصر الأموي": "umayyad", "الأموي": "umayyad",
+            "العصر العباسي": "abbasid", "العباسي": "abbasid",
+            "العصر الأندلسي": "andalusian",
+            "العصر المملوكي": "mamluk", "العصر الأيوبي": "abbasid",
+            "العصر العثماني": "ottoman",
+            "العصر الحديث": "modern", "الحديث": "modern",
+            "العصر المعاصر": "contemporary", "المعاصر": "contemporary",
+        }
+
+        def map_era(s):
+            for ar, slug in ERA_MAP.items():
+                if ar in (s or ""):
+                    return slug
+            return "abbasid"
+
+        def make_slug(text):
+            try:
+                from unidecode import unidecode
+                slug = re.sub(r"[^a-z0-9]+", "-", unidecode(text).lower()).strip("-")
+            except Exception:
+                slug = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
+            return slug[:200] or "unknown"
+
+        def parse_verses(text):
+            verses = []
+            for line in text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                parts = None
+                for sep in ["***", "\t", "   "]:
+                    if sep in line:
+                        parts = [p.strip() for p in line.split(sep, 1) if p.strip()]
+                        break
+                if parts and len(parts) == 2:
+                    h1, h2 = parts
+                else:
+                    h1, h2 = line, ""
+                if len(h1) > 2:
+                    verses.append((h1, h2))
+            return verses[:80]
+
+        try:
+            # Download CSV
+            logger.info("Ashaar import: downloading dataset...")
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await client.get("https://raw.githubusercontent.com/ARBML/Ashaar/main/data/ashaar.csv")
+                r.raise_for_status()
+                csv_text = r.text
+
+            logger.info(f"Ashaar import: downloaded {len(csv_text)} bytes")
+
+            reader = csv.DictReader(io.StringIO(csv_text))
+            rows = list(reader)
+            logger.info(f"Ashaar import: {len(rows)} rows in CSV")
+
+            # Parse poems
+            poems_data = []
+            for row in rows:
+                poet_name = (row.get("poet_name", "") or row.get("poet", "") or "").strip()
+                title = (row.get("poem_title", "") or row.get("title", "") or "").strip()
+                text = (row.get("poem_text", "") or row.get("text", "") or row.get("verses", "") or "").strip()
+                meter = (row.get("meter", "") or row.get("البحر", "") or "").strip()
+                era = (row.get("era", "") or row.get("العصر", "") or "").strip()
+
+                if not poet_name or not text or len(text) < 10:
+                    continue
+                if not title:
+                    title = text.split("\n")[0][:60] or "قصيدة"
+                if meter == "nan":
+                    meter = ""
+
+                poems_data.append({"poet_name": poet_name, "title": title, "text": text, "meter": meter or None, "era": era})
+
+            logger.info(f"Ashaar import: {len(poems_data)} valid poems parsed")
+
+            # Import to DB
+            engine = create_async_engine(settings.async_database_url, echo=False)
+            Session = async_sessionmaker(engine, expire_on_commit=False)
+
+            async with Session() as session:
+                existing_poet_slugs = set(r[0] for r in (await session.execute(select(Poet.slug))).fetchall())
+                existing_poem_slugs = set(r[0] for r in (await session.execute(select(Poem.slug))).fetchall())
+
+                poet_cache = {}
+                for slug in existing_poet_slugs:
+                    p = (await session.execute(select(Poet).where(Poet.slug == slug))).scalar_one_or_none()
+                    if p:
+                        poet_cache[slug] = p
+
+                added_poets = 0
+                added_poems = 0
+                added_verses = 0
+
+                for idx, pd in enumerate(poems_data):
+                    poet_slug = make_slug(pd["poet_name"])
+
+                    if poet_slug not in poet_cache:
+                        if poet_slug in existing_poet_slugs:
+                            p = (await session.execute(select(Poet).where(Poet.slug == poet_slug))).scalar_one_or_none()
+                            if p:
+                                poet_cache[poet_slug] = p
+                            else:
+                                continue
+                        else:
+                            p = Poet(name_ar=pd["poet_name"], slug=poet_slug, bio_ar="شاعر عربي", era=map_era(pd["era"]), nationality_ar="عربي", is_verified=True, poem_count=0, verse_count=0)
+                            session.add(p)
+                            await session.flush()
+                            poet_cache[poet_slug] = p
+                            existing_poet_slugs.add(poet_slug)
+                            added_poets += 1
+
+                    poet = poet_cache[poet_slug]
+                    poem_slug = f"{poet_slug}-{make_slug(pd['title'])}"[:580]
+
+                    if poem_slug in existing_poem_slugs:
+                        continue
+
+                    verses = parse_verses(pd["text"])
+                    if not verses:
+                        continue
+
+                    full_text = "\n".join(f"{h1} *** {h2}" if h2 else h1 for h1, h2 in verses)
+                    poem = Poem(poet_id=poet.id, title_ar=pd["title"], slug=poem_slug, full_text=full_text, meter=pd.get("meter"), verse_count=len(verses), era=map_era(pd.get("era", "")), is_verified=True, is_published=True, source="ashaar/ARBML")
+                    session.add(poem)
+                    await session.flush()
+                    existing_poem_slugs.add(poem_slug)
+
+                    for pos, (h1, h2) in enumerate(verses, 1):
+                        fv = f"{h1} *** {h2}" if h2 else h1
+                        session.add(Verse(poem_id=poem.id, poet_id=poet.id, position=pos, hemistich_1=h1, hemistich_2=h2 or None, full_verse=fv, full_verse_normalized=normalizer.normalize(fv), hemistich_1_normalized=normalizer.normalize(h1), hemistich_2_normalized=normalizer.normalize(h2) if h2 else None, poet_name_ar=pd["poet_name"], poet_slug=poet_slug, poem_title_ar=pd["title"], poem_slug=poem_slug, is_famous=False))
+                        added_verses += 1
+
+                    added_poems += 1
+                    poet.poem_count = (poet.poem_count or 0) + 1
+                    poet.verse_count = (poet.verse_count or 0) + len(verses)
+
+                    if added_poems % 100 == 0:
+                        await session.commit()
+                        _import_status.update(poets=added_poets, poems=added_poems, verses=added_verses)
+                        logger.info(f"Ashaar import: {added_poets} poets, {added_poems} poems, {added_verses} verses")
+
+                await session.commit()
+
+            _import_status.update(running=False, done=True, poets=added_poets, poems=added_poems, verses=added_verses)
+            logger.info(f"Ashaar import DONE: {added_poets} poets, {added_poems} poems, {added_verses} verses")
+
+        except Exception as e:
+            _import_status.update(running=False, done=True, error=str(e))
+            logger.error(f"Ashaar import FAILED: {e}")
+
     return app
 
 
