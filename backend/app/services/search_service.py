@@ -59,7 +59,7 @@ class SearchService:
             mode = "keyword"
 
         if mode == "keyword":
-            result = await self._keyword_search(normalized_query, filters, limit, offset)
+            result = await self._keyword_search(normalized_query, filters, limit, offset, raw_query=query)
         elif mode == "semantic":
             result = await self._semantic_search(query, filters, limit, offset)
         else:  # hybrid (default)
@@ -78,6 +78,7 @@ class SearchService:
         filters: dict,
         limit: int,
         offset: int,
+        raw_query: str = "",
     ) -> dict:
         try:
             index = self.meili.index("verses")
@@ -115,7 +116,7 @@ class SearchService:
             }
         except Exception as e:
             logger.warning(f"Meilisearch unavailable ({e}), falling back to PostgreSQL search")
-            return await self._postgres_search(normalized_query, filters, limit, offset)
+            return await self._postgres_search(normalized_query, filters, limit, offset, raw_query=raw_query)
 
     async def _postgres_search(
         self,
@@ -123,15 +124,25 @@ class SearchService:
         filters: dict,
         limit: int,
         offset: int,
+        raw_query: str = "",
     ) -> dict:
         """Search using PostgreSQL with relevance ranking — exact matches first."""
         try:
             filter_clauses = []
-            first_word = words[0] if words else query
-            params: dict = {"q_exact": f"%{query}%", "q_word": f"%{first_word}%", "limit": limit, "offset": offset}
+            # raw_query preserves hamza/diacritics for poet name matching
+            q_raw = raw_query or query
+            first_word = q_raw.split()[0] if q_raw.split() else q_raw
 
-            # Split query into individual words for word-level matching
+            # Split normalized query into words for verse matching
             words = [w.strip() for w in query.split() if len(w.strip()) > 1]
+            params: dict = {
+                "q_exact": f"%{query}%",
+                "q_raw": f"%{q_raw}%",
+                "q_word": f"%{first_word}%",
+                "limit": limit,
+                "offset": offset,
+            }
+
             word_likes = []
             for i, word in enumerate(words[:6]):
                 key = f"w{i}"
@@ -162,10 +173,9 @@ class SearchService:
                     v.poet_name_ar, v.poet_slug, v.poem_title_ar, v.poem_slug,
                     v.poet_id::text, v.poem_id::text, v.is_famous,
                     CASE
-                        WHEN v.poet_name_ar ILIKE :q_exact THEN 10
+                        WHEN v.poet_name_ar ILIKE :q_raw THEN 10
+                        WHEN v.poem_title_ar ILIKE :q_raw THEN 9
                         WHEN v.full_verse_normalized ILIKE :q_exact THEN 8
-                        WHEN v.poem_title_ar ILIKE :q_exact THEN 7
-                        WHEN {all_words_clause} AND v.poet_name_ar ILIKE :q_exact THEN 9
                         WHEN {all_words_clause} THEN 5
                         WHEN v.poet_name_ar ILIKE :q_word THEN 4
                         ELSE 1
@@ -173,8 +183,8 @@ class SearchService:
                 FROM verses v
                 LEFT JOIN poems p ON p.id = v.poem_id
                 WHERE (
-                    v.poet_name_ar ILIKE :q_exact
-                    OR v.poem_title_ar ILIKE :q_exact
+                    v.poet_name_ar ILIKE :q_raw
+                    OR v.poem_title_ar ILIKE :q_raw
                     OR ({any_words_clause})
                 ){filter_sql}
                 ORDER BY relevance DESC, v.is_famous DESC, v.view_count DESC
