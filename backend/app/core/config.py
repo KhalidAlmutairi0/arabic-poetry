@@ -24,12 +24,30 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_echo: bool = False
 
+    @property
+    def async_database_url(self) -> str:
+        url = self.database_url
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        return url
+
+    @property
+    def sync_db_url(self) -> str:
+        url = self.sync_database_url or self.database_url
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        for driver in ["+asyncpg", "+psycopg"]:
+            url = url.replace(driver, "")
+        return url
+
     # ── Redis ─────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
 
     # ── Meilisearch ───────────────────────────────────
-    meilisearch_url: str = "http://localhost:7700"
-    meilisearch_key: str = "meili_master_key_dev"
+    meilisearch_url: str = ""
+    meilisearch_key: str = ""
 
     # ── Ollama / AI ───────────────────────────────────
     ollama_url: str = "http://localhost:11434"

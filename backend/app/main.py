@@ -30,6 +30,12 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("🚀 Starting شعر Platform...")
 
+    # Auto-create tables (safe — only creates missing ones)
+    try:
+        await create_tables()
+    except Exception as e:
+        logger.warning(f"⚠️ Table creation failed: {e}")
+
     # Initialize Meilisearch indices
     try:
         await _setup_meilisearch()

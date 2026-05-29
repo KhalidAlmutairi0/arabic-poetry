@@ -1,0 +1,45 @@
+databases:
+  - name: poetry-db
+    plan: free
+    databaseName: poetry_db
+    user: poetry_user
+    ipAllowList: []
+    postgresMajorVersion: "16"
+
+services:
+  - type: redis
+    name: poetry-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+  - type: web
+    name: poetry-backend
+    plan: free
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: poetry-db
+          property: connectionString
+        # Render gives postgresql://, we need postgresql+asyncpg://
+      - key: REDIS_URL
+        fromService:
+          name: poetry-redis
+          type: redis
+          property: connectionString
+      - key: MEILISEARCH_URL
+        value: ""
+      - key: MEILISEARCH_KEY
+        value: ""
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: CORS_ORIGINS
+        value: '["https://arabic-poetry-ui.vercel.app"]'
+      - key: PORT
+        value: "8000"
+    healthCheckPath: /health
