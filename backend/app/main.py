@@ -298,9 +298,11 @@ def create_app() -> FastAPI:
     app.state.import_totals = {"poets": 0, "poems": 0, "verses": 0}
 
     @app.post("/admin/import-ashaar", tags=["system"])
-    async def import_ashaar(key: str = "", batch_size: int = 200):
+    async def import_ashaar(key: str = "", batch_size: int = 200, start_offset: int = -1):
         if key != settings.secret_key:
             return {"error": "unauthorized"}
+        if start_offset >= 0:
+            app.state.ashaar_offset = start_offset
 
         import re
         import httpx
@@ -409,10 +411,8 @@ def create_app() -> FastAPI:
 
             app.state.ashaar_offset = hf_offset
 
-            if not poems_data and no_more_rows:
+            if no_more_rows and not poems_data:
                 return {"status": "done", "message": "All 212K poems processed!", **app.state.import_totals, "hf_offset": hf_offset}
-            if not poems_data:
-                return {"status": "batch_empty", "message": "Batch had no valid poems, call again", **app.state.import_totals, "hf_offset": hf_offset}
 
             # Import batch to DB
             engine = create_async_engine(settings.async_database_url, echo=False)
