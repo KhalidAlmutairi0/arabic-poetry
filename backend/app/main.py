@@ -335,26 +335,23 @@ def create_app() -> FastAPI:
             except Exception:
                 return re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()[:200] or "unknown"
 
-        def parse_verses(text):
-            verses = []
-            for line in text.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                parts = None
-                for sep in ["***", "\t", "   "]:
-                    if sep in line:
-                        parts = [p.strip() for p in line.split(sep, 1) if p.strip()]
-                        break
-                h1, h2 = (parts[0], parts[1]) if parts and len(parts) == 2 else (line, "")
-                if len(h1) > 2:
-                    verses.append((h1, h2))
-            return verses[:80]
+        def parse_verse_line(line):
+            """Split a single verse string into (h1, h2)."""
+            line = line.strip()
+            if not line or len(line) < 3:
+                return None
+            for sep in ["***", "\t", "   "]:
+                if sep in line:
+                    parts = [p.strip() for p in line.split(sep, 1) if p.strip()]
+                    if len(parts) == 2:
+                        return (parts[0], parts[1])
+                    break
+            return (line, "")
 
         try:
-            # Fetch batch from HuggingFace rows API
             hf_offset = app.state.ashaar_offset
             poems_data = []
+            no_more_rows = False
 
             async with httpx.AsyncClient(timeout=60.0) as client:
                 fetched = 0
@@ -362,9 +359,12 @@ def create_app() -> FastAPI:
                     url = f"https://datasets-server.huggingface.co/rows?dataset=arbml%2FAshaar_dataset&config=default&split=train&offset={hf_offset}&length=100"
                     r = await client.get(url)
                     if r.status_code != 200:
+                        no_more_rows = True
                         break
-                    rows = r.json().get("rows", [])
+                    data = r.json()
+                    rows = data.get("rows", [])
                     if not rows:
+                        no_more_rows = True
                         break
 
                     for item in rows:
@@ -372,9 +372,9 @@ def create_app() -> FastAPI:
                         poet_name = (row.get("poet_name") or "").strip()
                         title = (row.get("poem_title") or "").strip()
                         verses_list = row.get("poem_verses") or []
-                        text = row.get("text") or ""
                         raw_meter = row.get("poem_meter")
                         era = (row.get("poet_era") or "").strip()
+                        poet_bio = (row.get("poet_description") or "").strip()
 
                         if isinstance(raw_meter, int) and 0 <= raw_meter < len(METER_NAMES):
                             meter = METER_NAMES[raw_meter]
@@ -383,24 +383,36 @@ def create_app() -> FastAPI:
                         else:
                             meter = None
 
-                        if not poet_name:
+                        if not poet_name or not verses_list:
                             continue
-                        if verses_list and isinstance(verses_list, list):
-                            text = "\n".join(str(v) for v in verses_list if v)
-                        if not text or len(text) < 10:
-                            continue
-                        if not title:
-                            title = text.split("\n")[0][:60] or "قصيدة"
 
-                        poems_data.append({"poet_name": poet_name, "title": title, "text": text, "meter": meter, "era": era})
+                        # Parse verses directly from the list
+                        verses = []
+                        for v in verses_list:
+                            if v and isinstance(v, str):
+                                parsed = parse_verse_line(v)
+                                if parsed:
+                                    verses.append(parsed)
+                        if not verses:
+                            continue
+
+                        if not title:
+                            title = verses[0][0][:60] if verses else "قصيدة"
+
+                        poems_data.append({
+                            "poet_name": poet_name, "title": title, "verses": verses,
+                            "meter": meter, "era": era, "poet_bio": poet_bio[:500] if poet_bio else "",
+                        })
 
                     hf_offset += 100
                     fetched += 100
 
             app.state.ashaar_offset = hf_offset
 
+            if not poems_data and no_more_rows:
+                return {"status": "done", "message": "All 212K poems processed!", **app.state.import_totals, "hf_offset": hf_offset}
             if not poems_data:
-                return {"status": "done", "message": "No more data to import", **app.state.import_totals, "hf_offset": hf_offset}
+                return {"status": "batch_empty", "message": "Batch had no valid poems, call again", **app.state.import_totals, "hf_offset": hf_offset}
 
             # Import batch to DB
             engine = create_async_engine(settings.async_database_url, echo=False)
@@ -422,15 +434,13 @@ def create_app() -> FastAPI:
                     # Get or create poet
                     poet = (await session.execute(select(Poet).where(Poet.slug == poet_slug))).scalar_one_or_none()
                     if not poet:
-                        poet = Poet(name_ar=pd["poet_name"], slug=poet_slug, bio_ar="شاعر عربي", era=map_era(pd["era"]), nationality_ar="عربي", is_verified=True, poem_count=0, verse_count=0)
+                        bio = pd.get("poet_bio") or "شاعر عربي"
+                        poet = Poet(name_ar=pd["poet_name"], slug=poet_slug, bio_ar=bio, era=map_era(pd["era"]), nationality_ar="عربي", is_verified=True, poem_count=0, verse_count=0)
                         session.add(poet)
                         await session.flush()
                         added_poets += 1
 
-                    verses = parse_verses(pd["text"])
-                    if not verses:
-                        continue
-
+                    verses = pd["verses"]
                     full_text = "\n".join(f"{h1} *** {h2}" if h2 else h1 for h1, h2 in verses)
                     poem = Poem(poet_id=poet.id, title_ar=pd["title"], slug=poem_slug, full_text=full_text, meter=pd["meter"], verse_count=len(verses), era=map_era(pd.get("era", "")), is_verified=True, is_published=True, source="ashaar/ARBML")
                     session.add(poem)
