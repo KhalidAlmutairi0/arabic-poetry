@@ -2,7 +2,7 @@
 AI Router — verse explanation with streaming SSE.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from uuid import UUID
 from app.services.verse_service import VerseService
@@ -13,10 +13,13 @@ from app.core.database import run_in_background
 from app.core.config import settings
 from app.core.exceptions import not_found
 from app.models.verse_explanation import VerseExplanation
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import asyncio
 import json
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.get(
@@ -24,7 +27,9 @@ router = APIRouter(prefix="/ai", tags=["ai"])
     summary="Stream AI explanation for a verse",
     description="Returns Server-Sent Events (SSE) stream of the explanation.",
 )
+@limiter.limit(settings.rate_limit_ai)
 async def explain_verse(
+    request: Request,
     verse_id: UUID,
     type: str = Query("simple", description="simple | literary | linguistic"),
     verse_service: VerseService = Depends(get_verse_service),

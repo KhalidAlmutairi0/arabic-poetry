@@ -17,6 +17,7 @@ async def list_poems(
     poet_id: str | None = Query(None),
     era: str | None = Query(None),
     meter: str | None = Query(None),
+    category: str | None = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=50),
     poem_service: PoemService = Depends(get_poem_service),
@@ -25,6 +26,7 @@ async def list_poems(
         poet_id=UUID(poet_id) if poet_id else None,
         era=era,
         meter=meter,
+        category_slug=category,
         page=page,
         limit=limit,
     )

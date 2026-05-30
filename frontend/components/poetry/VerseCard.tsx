@@ -4,6 +4,17 @@ import Link from "next/link";
 import { Share2, Star } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 
+function sanitizeHtml(html: string): string {
+  return html
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+    .replace(/&lt;mark&gt;/g, "<mark>")
+    .replace(/&lt;\/mark&gt;/g, "</mark>");
+}
+
 interface Verse {
   id: string;
   full_verse: string;
@@ -25,6 +36,7 @@ interface VerseCardProps {
 
 export function VerseCard({ verse, className, showPoet = true }: VerseCardProps) {
   const hasHemistiches = verse.hemistich_1 && verse.hemistich_2;
+  const needsHighlight = !!verse._highlighted;
 
   return (
     <div
@@ -50,22 +62,18 @@ export function VerseCard({ verse, className, showPoet = true }: VerseCardProps)
         <div className="verse-text text-center" dir="rtl">
           {hasHemistiches ? (
             <div className="flex justify-center items-baseline gap-4 md:gap-8 flex-wrap">
-              <span
-                className="block md:inline"
-                dangerouslySetInnerHTML={{ __html: verse.hemistich_1 || "" }}
-              />
+              <span className="block md:inline">{verse.hemistich_1}</span>
               <span className="text-accent-dim opacity-40 hidden md:inline text-sm">◈</span>
-              <span
-                className="block md:inline"
-                dangerouslySetInnerHTML={{ __html: verse.hemistich_2 || "" }}
-              />
+              <span className="block md:inline">{verse.hemistich_2}</span>
             </div>
-          ) : (
+          ) : needsHighlight ? (
             <span
               dangerouslySetInnerHTML={{
-                __html: verse._highlighted || verse.full_verse,
+                __html: sanitizeHtml(verse._highlighted || ""),
               }}
             />
+          ) : (
+            <span>{verse.full_verse}</span>
           )}
         </div>
       </Link>

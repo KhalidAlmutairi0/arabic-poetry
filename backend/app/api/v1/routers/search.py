@@ -1,21 +1,27 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.search_service import SearchService
 from app.services.discovery_service import DiscoveryService
 from app.api.v1.dependencies import get_search_service, get_cache
 from app.core.database import get_db
 from app.core.cache import CacheService
+from app.core.config import settings
 from app.schemas.search import SearchResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import asyncio
 import json
 
 router = APIRouter(prefix="/search", tags=["search"])
+limiter = Limiter(key_func=get_remote_address)
 
 DISCOVERY_THRESHOLD = 3
 
 
 @router.get("/", summary="Search Arabic poetry")
+@limiter.limit(settings.rate_limit_search)
 async def search(
+    request: Request,
     q: str = Query(..., min_length=1, max_length=500, description="البحث في الشعر العربي"),
     mode: str = Query("hybrid", description="keyword | semantic | hybrid"),
     type: str = Query("verse", description="verse | poem | poet | all"),
@@ -95,7 +101,9 @@ async def search(
 
 
 @router.get("/autocomplete", summary="Search autocomplete")
+@limiter.limit(settings.rate_limit_search)
 async def autocomplete(
+    request: Request,
     q: str = Query(..., min_length=1, max_length=100),
     search_service: SearchService = Depends(get_search_service),
     cache: CacheService = Depends(get_cache),

@@ -4,9 +4,12 @@ FastAPI Application Entry Point
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header as FastAPIHeader, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import logging
 import time
 
@@ -15,6 +18,17 @@ from app.core.database import create_tables
 from app.core.cache import get_redis, close_redis
 from app.core.exceptions import NotFoundException, PoetryException
 from app.api.v1.router import api_router
+
+limiter = Limiter(key_func=get_remote_address, default_limits=[settings.rate_limit_default])
+
+
+def _verify_admin_key(authorization: str | None) -> None:
+    """Check admin Authorization header. Raises 403 on failure."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    token = authorization.removeprefix("Bearer ").strip()
+    if token != settings.secret_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 # ── Logging ───────────────────────────────────────────
 logging.basicConfig(
@@ -109,6 +123,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # ── Rate limiting ────────────────────────────────
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
     # ── CORS ──────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
@@ -127,12 +145,12 @@ def create_app() -> FastAPI:
         response.headers["X-Process-Time-Ms"] = f"{process_time:.0f}"
         return response
 
-    # ── Show errors in responses (debug) ────────────────
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
         import traceback
         logger.error(f"Unhandled: {exc}\n{traceback.format_exc()}")
-        return JSONResponse(status_code=500, content={"error": str(exc)[:500]})
+        detail = str(exc)[:500] if settings.debug else "Internal server error"
+        return JSONResponse(status_code=500, content={"error": detail})
 
     # ── Exception handlers ────────────────────────────
     @app.exception_handler(NotFoundException)
@@ -178,9 +196,8 @@ def create_app() -> FastAPI:
 
     # ── Remote seed endpoint ─────────────────────────
     @app.post("/admin/seed", tags=["system"])
-    async def seed_database(key: str = ""):
-        if key != settings.secret_key:
-            return {"error": "unauthorized"}
+    async def seed_database(authorization: str | None = FastAPIHeader(None)):
+        _verify_admin_key(authorization)
 
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
         from sqlalchemy import text
@@ -305,9 +322,12 @@ def create_app() -> FastAPI:
     app.state.import_totals = {"poets": 0, "poems": 0, "verses": 0}
 
     @app.post("/admin/import-ashaar", tags=["system"])
-    async def import_ashaar(key: str = "", batch_size: int = 200, start_offset: int = -1):
-        if key != settings.secret_key:
-            return {"error": "unauthorized"}
+    async def import_ashaar(
+        batch_size: int = 200,
+        start_offset: int = -1,
+        authorization: str | None = FastAPIHeader(None),
+    ):
+        _verify_admin_key(authorization)
         if start_offset >= 0:
             app.state.ashaar_offset = start_offset
 
@@ -481,10 +501,9 @@ def create_app() -> FastAPI:
         return {**app.state.import_totals, "hf_offset": app.state.ashaar_offset}
 
     @app.post("/admin/seed-bulk", tags=["system"])
-    async def seed_bulk(request: Request, key: str = ""):
+    async def seed_bulk(request: Request, authorization: str | None = FastAPIHeader(None)):
         """Accept pre-parsed poems from the local import script."""
-        if key != settings.secret_key:
-            return {"error": "unauthorized"}
+        _verify_admin_key(authorization)
         poems = await request.json()
         if not poems or not isinstance(poems, list):
             return {"error": "POST a JSON array of poems"}

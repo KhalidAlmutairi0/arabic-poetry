@@ -5,6 +5,7 @@ from sqlalchemy.orm import selectinload
 from app.models.poem import Poem
 from app.models.verse import Verse
 from app.models.poet import Poet
+from app.models.category import Category, PoemCategory
 from app.core.exceptions import NotFoundException
 from app.utils.arabic_normalizer import arabic_to_slug, normalizer
 import logging
@@ -57,6 +58,15 @@ class PoemService:
             count_query = count_query.where(Poem.era == era)
         if meter:
             query = query.where(Poem.meter == meter)
+            count_query = count_query.where(Poem.meter == meter)
+        if category_slug:
+            cat_subq = (
+                select(PoemCategory.poem_id)
+                .join(Category, Category.id == PoemCategory.category_id)
+                .where(Category.slug == category_slug)
+            )
+            query = query.where(Poem.id.in_(cat_subq))
+            count_query = count_query.where(Poem.id.in_(cat_subq))
 
         query = (
             query

@@ -38,6 +38,17 @@
 
   --radius: 0.5rem;
 
+  /* Component aliases used across the codebase */
+  --surface: var(--card);
+  --surface-elevated: oklch(0.96 0.008 75);
+  --surface-hover: oklch(0.94 0.01 75);
+  --text-primary: var(--foreground);
+  --text-secondary: var(--secondary-foreground);
+  --text-muted: var(--muted-foreground);
+  --accent-light: oklch(0.62 0.12 38);
+  --accent-dim: oklch(0.42 0.06 45);
+  --border-strong: oklch(0.82 0.02 75);
+
   --sidebar: oklch(0.965 0.008 75);
   --sidebar-foreground: oklch(0.22 0.02 45);
   --sidebar-primary: oklch(0.35 0.06 45);
@@ -81,6 +92,17 @@
   --verse-highlight: oklch(0.35 0.08 55);
   --poet-accent: oklch(0.65 0.1 180);
 
+  /* Component aliases */
+  --surface: var(--card);
+  --surface-elevated: oklch(0.22 0.012 45);
+  --surface-hover: oklch(0.26 0.012 45);
+  --text-primary: var(--foreground);
+  --text-secondary: var(--secondary-foreground);
+  --text-muted: var(--muted-foreground);
+  --accent-light: oklch(0.78 0.10 55);
+  --accent-dim: oklch(0.50 0.08 55);
+  --border-strong: oklch(0.35 0.015 45);
+
   --sidebar: oklch(0.14 0.015 45);
   --sidebar-foreground: oklch(0.92 0.01 75);
   --sidebar-primary: oklch(0.88 0.03 55);
@@ -119,6 +141,13 @@
   --color-verse: var(--verse);
   --color-verse-highlight: var(--verse-highlight);
   --color-poet-accent: var(--poet-accent);
+
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+  --color-accent-light: var(--accent-light);
+  --color-accent-dim: var(--accent-dim);
+  --color-border-strong: var(--border-strong);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -215,4 +244,114 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+/* ── Component Classes ─────────────────────────────── */
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--background);
+  font-weight: 600;
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0.625rem 1.25rem;
+  transition: background 0.2s, transform 0.1s;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-primary:hover {
+  background: var(--accent-light);
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--secondary-foreground);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0.5rem 1rem;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  background: var(--surface-elevated);
+  color: var(--foreground);
+  border-color: var(--border-strong);
+}
+
+.accent-line {
+  width: 48px;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+  border-radius: 2px;
+}
+
+.search-input {
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem 1rem 3rem;
+  font-family: var(--font-serif);
+  font-size: 1.1rem;
+  color: var(--foreground);
+  direction: rtl;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px oklch(0.55 0.12 35 / 0.15);
+}
+
+.search-input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.verse-text mark,
+mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 4px;
+}
+
+.streaming-cursor::after {
+  content: '|';
+  animation: blink 1s step-end infinite;
+  color: var(--accent);
+  margin-right: 2px;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-down {
+  animation: slide-down 0.15s ease-out;
 }

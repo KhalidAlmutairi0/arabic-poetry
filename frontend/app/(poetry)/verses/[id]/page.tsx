@@ -87,7 +87,7 @@ export default async function VersePage({ params }: Props) {
           <div className="font-arabic text-sm text-secondary">
             {verse.poet_name_ar && (
               <Link
-                href={`/poets/${verse.poet_id}`}
+                href={`/poets/${verse.poet_slug || verse.poet_id}`}
                 className="text-accent hover:text-accent-light transition-colors font-semibold"
               >
                 — {verse.poet_name_ar}

@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { IBM_Plex_Sans_Arabic, Noto_Naskh_Arabic } from 'next/font/google'
-import { Header } from '@/components/header'
-import { Footer } from '@/components/footer'
+import { Header } from '@/components/layout/Header'
+import { Footer } from '@/components/layout/Footer'
 import './globals.css'
 
 const ibmPlexSansArabic = IBM_Plex_Sans_Arabic({

@@ -80,6 +80,7 @@ async def get_verse(
         "poet_name_ar": verse.poet_name_ar,
         "poem_title_ar": verse.poem_title_ar,
         "poem_slug": verse.poem_slug,
+        "poet_slug": verse.poet_slug,
         "poet_id": str(verse.poet_id),
         "poem_id": str(verse.poem_id),
         "explanations": [
