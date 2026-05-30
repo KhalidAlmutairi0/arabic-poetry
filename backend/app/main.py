@@ -653,16 +653,14 @@ def create_app() -> FastAPI:
         _verify_admin_key(authorization)
 
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-        from sqlalchemy import select, update as sa_update, and_, func
+        from sqlalchemy import select, update as sa_update, text as sa_text
         from app.models import Poet, Verse
 
         engine = create_async_engine(settings.async_database_url, echo=False)
         Session = async_sessionmaker(engine, expire_on_commit=False)
 
         async with Session() as session:
-            await session.execute(
-                sa_update(Verse).values(is_famous=False)
-            )
+            await session.execute(sa_text("UPDATE verses SET is_famous = false WHERE is_famous = true"))
 
             top_poets = (await session.execute(
                 select(Poet.id).order_by(Poet.verse_count.desc()).limit(200)
@@ -670,24 +668,20 @@ def create_app() -> FastAPI:
 
             marked = 0
             for poet_id in top_poets:
-                good_verses = (await session.execute(
-                    select(Verse.id).where(
-                        and_(
-                            Verse.poet_id == poet_id,
-                            Verse.hemistich_1.isnot(None),
-                            Verse.hemistich_2.isnot(None),
-                            func.length(Verse.hemistich_1) > 15,
-                            func.length(Verse.hemistich_2) > 15,
-                            Verse.position <= 3,
-                        )
-                    ).limit(4)
+                rows = (await session.execute(
+                    select(Verse).where(Verse.poet_id == poet_id).order_by(Verse.position).limit(20)
                 )).scalars().all()
 
-                if good_verses:
-                    await session.execute(
-                        sa_update(Verse).where(Verse.id.in_(good_verses)).values(is_famous=True)
-                    )
-                    marked += len(good_verses)
+                count = 0
+                for v in rows:
+                    if count >= 3:
+                        break
+                    h1 = v.hemistich_1 or ""
+                    h2 = v.hemistich_2 or ""
+                    if len(h1) > 15 and len(h2) > 15:
+                        v.is_famous = True
+                        count += 1
+                        marked += 1
 
             await session.commit()
 
