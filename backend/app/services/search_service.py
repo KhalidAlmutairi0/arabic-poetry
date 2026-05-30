@@ -175,19 +175,25 @@ class SearchService:
                     CASE
                         WHEN v.poet_name_ar ILIKE :q_raw THEN 10
                         WHEN v.poem_title_ar ILIKE :q_raw THEN 9
-                        WHEN v.full_verse_normalized ILIKE :q_exact THEN 8
+                        WHEN v.hemistich_1_normalized ILIKE :q_exact THEN 8
+                        WHEN v.full_verse_normalized ILIKE :q_exact THEN 7
                         WHEN {all_words_clause} THEN 5
                         WHEN v.poet_name_ar ILIKE :q_word THEN 4
                         ELSE 1
-                    END AS relevance
+                    END
+                    + CASE WHEN v.is_famous THEN 2 ELSE 0 END
+                    + CASE WHEN pt.verse_count > 100 THEN 1 ELSE 0 END
+                    AS relevance
                 FROM verses v
                 LEFT JOIN poems p ON p.id = v.poem_id
+                LEFT JOIN poets pt ON pt.id = v.poet_id
                 WHERE (
                     v.poet_name_ar ILIKE :q_raw
                     OR v.poem_title_ar ILIKE :q_raw
+                    OR v.hemistich_1_normalized ILIKE :q_exact
                     OR ({any_words_clause})
                 ){filter_sql}
-                ORDER BY relevance DESC, v.is_famous DESC, v.view_count DESC
+                ORDER BY relevance DESC, pt.verse_count DESC, v.view_count DESC
                 LIMIT :limit OFFSET :offset
             """)
 
