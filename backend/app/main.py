@@ -649,34 +649,45 @@ def create_app() -> FastAPI:
 
     @app.post("/admin/mark-famous", tags=["system"])
     async def mark_famous_verses(authorization: str | None = FastAPIHeader(None)):
-        """Mark top verses as famous based on poet popularity and verse position."""
+        """Mark top verses as famous — only real verses with both hemistiches."""
         _verify_admin_key(authorization)
 
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-        from sqlalchemy import select, update as sa_update, and_
+        from sqlalchemy import select, update as sa_update, and_, func
         from app.models import Poet, Verse
 
         engine = create_async_engine(settings.async_database_url, echo=False)
         Session = async_sessionmaker(engine, expire_on_commit=False)
 
         async with Session() as session:
+            await session.execute(
+                sa_update(Verse).values(is_famous=False)
+            )
+
             top_poets = (await session.execute(
                 select(Poet.id).order_by(Poet.verse_count.desc()).limit(200)
             )).scalars().all()
 
             marked = 0
             for poet_id in top_poets:
-                first_verses = (await session.execute(
+                good_verses = (await session.execute(
                     select(Verse.id).where(
-                        and_(Verse.poet_id == poet_id, Verse.position <= 2)
-                    ).limit(10)
+                        and_(
+                            Verse.poet_id == poet_id,
+                            Verse.hemistich_1.isnot(None),
+                            Verse.hemistich_2.isnot(None),
+                            func.length(Verse.hemistich_1) > 15,
+                            func.length(Verse.hemistich_2) > 15,
+                            Verse.position <= 3,
+                        )
+                    ).limit(4)
                 )).scalars().all()
 
-                if first_verses:
+                if good_verses:
                     await session.execute(
-                        sa_update(Verse).where(Verse.id.in_(first_verses)).values(is_famous=True)
+                        sa_update(Verse).where(Verse.id.in_(good_verses)).values(is_famous=True)
                     )
-                    marked += len(first_verses)
+                    marked += len(good_verses)
 
             await session.commit()
 
