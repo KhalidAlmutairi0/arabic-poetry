@@ -647,6 +647,41 @@ def create_app() -> FastAPI:
 
         return {"updated": updated, "total_poets": len(all_poets)}
 
+    @app.post("/admin/mark-famous", tags=["system"])
+    async def mark_famous_verses(authorization: str | None = FastAPIHeader(None)):
+        """Mark top verses as famous based on poet popularity and verse position."""
+        _verify_admin_key(authorization)
+
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy import select, update as sa_update, and_
+        from app.models import Poet, Verse
+
+        engine = create_async_engine(settings.async_database_url, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with Session() as session:
+            top_poets = (await session.execute(
+                select(Poet.id).order_by(Poet.verse_count.desc()).limit(200)
+            )).scalars().all()
+
+            marked = 0
+            for poet_id in top_poets:
+                first_verses = (await session.execute(
+                    select(Verse.id).where(
+                        and_(Verse.poet_id == poet_id, Verse.position <= 2)
+                    ).limit(10)
+                )).scalars().all()
+
+                if first_verses:
+                    await session.execute(
+                        sa_update(Verse).where(Verse.id.in_(first_verses)).values(is_famous=True)
+                    )
+                    marked += len(first_verses)
+
+            await session.commit()
+
+        return {"marked_famous": marked, "poets_processed": len(top_poets)}
+
     return app
 
 
