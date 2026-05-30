@@ -602,6 +602,51 @@ def create_app() -> FastAPI:
 
         return {"added": added, "skipped": skipped, "total_in_batch": len(poems)}
 
+    @app.post("/admin/recount", tags=["system"])
+    async def recount_poets(authorization: str | None = FastAPIHeader(None)):
+        """Recalculate poem_count and verse_count for every poet from actual data."""
+        _verify_admin_key(authorization)
+
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy import select, func, update as sa_update
+        from app.models import Poet, Poem, Verse
+
+        engine = create_async_engine(settings.async_database_url, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with Session() as session:
+            rows = (await session.execute(
+                select(
+                    Poem.poet_id,
+                    func.count(Poem.id).label("pc"),
+                ).where(Poem.is_published == True).group_by(Poem.poet_id)
+            )).all()
+
+            poem_counts = {r.poet_id: r.pc for r in rows}
+
+            verse_rows = (await session.execute(
+                select(
+                    Verse.poet_id,
+                    func.count(Verse.id).label("vc"),
+                ).group_by(Verse.poet_id)
+            )).all()
+
+            verse_counts = {r.poet_id: r.vc for r in verse_rows}
+
+            updated = 0
+            all_poets = (await session.execute(select(Poet))).scalars().all()
+            for poet in all_poets:
+                pc = poem_counts.get(poet.id, 0)
+                vc = verse_counts.get(poet.id, 0)
+                if poet.poem_count != pc or poet.verse_count != vc:
+                    poet.poem_count = pc
+                    poet.verse_count = vc
+                    updated += 1
+
+            await session.commit()
+
+        return {"updated": updated, "total_poets": len(all_poets)}
+
     return app
 
 
